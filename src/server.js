@@ -107,6 +107,9 @@ app.use('/api/v1/admin', adminRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
+// Maps socket.id → test roomId — used by test-room handlers for disconnect cleanup
+const testRoomParticipants = new Map();
+
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
@@ -137,8 +140,59 @@ io.on('connection', (socket) => {
     socket.to(roomId).emit('webrtc-ice-candidate', { from: socket.id, candidate });
   });
 
+  // ─── Test Room (no auth, multi-peer, full debug logging) ────────────────────
+  socket.on('test-room:join', ({ roomId }) => {
+    if (!roomId) return;
+    const nsRoom = `test::${roomId}`;
+
+    // Collect existing participants before this socket joins
+    const room = io.sockets.adapter.rooms.get(nsRoom);
+    const existing = room ? [...room].filter((id) => id !== socket.id) : [];
+
+    socket.join(nsRoom);
+    testRoomParticipants.set(socket.id, roomId);
+
+    const total = (io.sockets.adapter.rooms.get(nsRoom)?.size) ?? 1;
+    console.log(`[TestRoom] User joined room "${roomId}" | socket=${socket.id} | participants=${total}`);
+
+    // Tell the newcomer who is already in the room
+    socket.emit('test-room:participants', { participants: existing });
+
+    // Tell existing peers about the newcomer
+    socket.to(nsRoom).emit('test-room:peer-joined', { peerId: socket.id });
+    console.log(`[TestRoom] Room participant count for "${roomId}": ${total}`);
+  });
+
+  socket.on('test-room:offer', ({ to, sdp }) => {
+    if (!to || !sdp) return;
+    console.log(`[TestRoom] Offer relayed from ${socket.id} → ${to}`);
+    io.to(to).emit('test-room:offer', { from: socket.id, sdp });
+  });
+
+  socket.on('test-room:answer', ({ to, sdp }) => {
+    if (!to || !sdp) return;
+    console.log(`[TestRoom] Answer relayed from ${socket.id} → ${to}`);
+    io.to(to).emit('test-room:answer', { from: socket.id, sdp });
+  });
+
+  socket.on('test-room:ice', ({ to, candidate }) => {
+    if (!to || !candidate) return;
+    console.log(`[TestRoom] ICE candidate relayed from ${socket.id} → ${to}`);
+    io.to(to).emit('test-room:ice', { from: socket.id, candidate });
+  });
+
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
+    // Clean up test room membership
+    const roomId = testRoomParticipants.get(socket.id);
+    if (roomId) {
+      testRoomParticipants.delete(socket.id);
+      const nsRoom = `test::${roomId}`;
+      socket.to(nsRoom).emit('test-room:peer-left', { peerId: socket.id });
+      const remaining = io.sockets.adapter.rooms.get(nsRoom)?.size ?? 0;
+      console.log(`[TestRoom] User left room "${roomId}" | socket=${socket.id} | remaining=${remaining}`);
+    }
+    console.log(`[TestRoom] Socket disconnected: ${socket.id}`);
   });
 });
 
