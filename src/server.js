@@ -36,10 +36,17 @@ dotenv.config();
 
 const app = express();
 const httpServer = createServer(app);
+
+// CORS_ORIGIN can be a comma-separated list: "https://qurain.almazoon.net,http://localhost:5173"
+const rawOrigins = process.env.CORS_ORIGIN || 'http://localhost:5173';
+const allowedOrigins = rawOrigins.split(',').map((o) => o.trim());
+const corsOrigin = allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins;
+
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+    origin: corsOrigin,
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 
@@ -49,11 +56,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Middleware
-app.use(helmet());
+app.use(helmet({
+  // Allow same-origin popups so Socket.io can check window.closed without COOP blocking it
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+}));
 app.use(compression());
 app.use(morgan('dev'));
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  origin: corsOrigin,
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
